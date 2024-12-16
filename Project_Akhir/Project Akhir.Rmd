@@ -1,0 +1,219 @@
+---
+title: "Project Akhir"
+author: "ibnu"
+date: "2024-12-01"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Project Akhir
+
+## Import Library
+```{r}
+library(readxl)
+library(dplyr)
+library(forecast)
+library(ggplot2)
+library(here)
+library(tidyverse)
+library(tseries)
+library(shiny)
+library(lubridate)
+```
+
+## Import Data
+
+```{r}
+data_bensin = read_excel(here('bensin.xlsx'))
+head(data)
+```
+
+## Data Preprocessing
+
+```{r}
+data_bensin = data_bensin %>% mutate(Date = as.Date(Date, format = "%b %d, %Y"), Bensin = as.numeric(Bensin))
+
+str(data_bensin)
+summary(data_bensin)
+```
+
+## Nilai Na
+Untuk mengecek nilai na. jika ada maka nilai na akan diganti dengan rata rata dari nilai sebelum+nilai setelah.
+```{r}
+# Mengecek apakah ada NA pada kolom Bensin
+if (any(is.na(data_bensin$Bensin))) {
+  cat("Ada nilai NA di kolom Bensin\n")
+} else {
+  cat("Tidak ada nilai NA di kolom Bensin\n")
+}
+
+# Menampilkan baris yang memiliki nilai NA pada kolom Bensin (jika ada)
+data_na_bensin = data_bensin %>% filter(is.na(Bensin))
+if (nrow(data_na_bensin) > 0) {
+  cat("Baris dengan NA di kolom Bensin:\n")
+  print(data_na_bensin)
+}
+
+
+data_bensin = data_bensin %>%
+  mutate(
+    Bensin = ifelse(
+      is.na(Bensin),
+      (lag(Bensin, default = NA) + lead(Bensin, default = NA)) / 2,
+      Bensin
+    )
+  )
+
+
+# Mengecek apakah ada NA pada kolom Date
+if (any(is.na(data_bensin$Date))) {
+  cat("Ada nilai NA di kolom Date.\n")
+} else {
+  cat("Tidak ada nilai NA di kolom Date.\n")
+}
+
+# Menampilkan baris yang memiliki nilai NA pada kolom Date (jika ada)
+data_na_date = data_bensin %>% filter(is.na(Date))
+if (nrow(data_na_date) > 0) {
+  cat("Baris dengan NA di kolom Date:\n")
+  print(data_na_date)
+}
+
+```
+
+## Visualisasi Data
+
+```{r}
+# Visualisasi Data Asli
+ggplot(data_bensin, aes(x = Date, y = Bensin)) +
+  geom_line(color = "blue") +
+  labs(title = "Penjualan Bensin dari Waktu ke Waktu", x = "Tanggal", y = "Penjualan Bensin") +
+  theme_minimal()
+
+```
+
+## Uji Stasioneritas
+Uji stasioneritas adalah proses untuk menentukan apakah data deret waktu (time series) bersifat stasioner atau tidak. Data stasioner adalah data yang karakteristik statistiknya (misalnya rata-rata, varians, dan autokorelasi) tidak berubah seiring waktu.
+
+Dalam konteks analisis deret waktu, stasioneritas sangat penting karena banyak metode pemodelan deret waktu, seperti ARIMA (Autoregressive Integrated Moving Average), memerlukan data yang stasioner untuk menghasilkan hasil yang akurat dan dapat diandalkan.
+
+```{r}
+# Uji ADF
+adf_test = adf.test(data_bensin$Bensin, alternative = "stationary")
+cat("P-value ADF Test:", adf_test$p.value, "\n")
+
+if (adf_test$p.value < 0.05) {
+  cat("Data stasioner.\n")
+} else {
+  cat("Data tidak stasioner, perlu diferensiasi.\n")
+}
+```
+
+## Model ARIMA
+
+```{r}
+# Pembuatan Model ARIMA
+model_arima = auto.arima(data_bensin$Bensin, seasonal = TRUE)
+
+# Menampilkan Ringkasan Model
+summary(model_arima)
+```
+
+## Evaluasi Model
+
+```{r}
+# Diagnostik Model
+checkresiduals(model_arima)
+
+```
+
+## Prediksi
+
+```{r}
+# Prediksi Penjualan 12 Bulan ke Depan
+forecast_arima <- forecast(model_arima, h = 365)
+
+# Visualisasi Prediksi
+autoplot(forecast_arima) +
+  labs(title = "Prediksi Penjualan Bensin 12 Bulan ke Depan", x = "Tanggal", y = "Penjualan Bensin") +
+  theme_minimal()
+```
+
+## Shiny
+
+```{r}
+ui <- fluidPage(
+  titlePanel("Aplikasi Prediksi Penjualan Bensin"),
+  
+  sidebarLayout(
+    sidebarPanel(
+      h4("Pilih Rentang Tanggal"),
+      dateInput("start_date", "Tanggal Mulai:", 
+                min = min(data_bensin$Date), 
+                max = max(data_bensin$Date), 
+                value = min(data_bensin$Date)),
+      
+      dateInput("end_date", "Tanggal Akhir:", 
+                min = min(data_bensin$Date), 
+                max = max(data_bensin$Date), 
+                value = max(data_bensin$Date)),
+      
+      numericInput("forecast_days", 
+                   "Jumlah Hari Prediksi:", 
+                   value = 30, 
+                   min = 1),
+      
+      actionButton("update", "Tampilkan Grafik")
+    ),
+    
+    mainPanel(
+      tabsetPanel(
+        tabPanel("Grafik Data Asli", plotOutput("originalPlot")),
+        tabPanel("Grafik Prediksi", plotOutput("forecastPlot"))
+      )
+    )
+  )
+)
+
+server <- function(input, output) {
+  
+  # Reactive data subset berdasarkan input tanggal
+  filtered_data <- reactive({
+    data_bensin %>%
+      filter(Date >= input$start_date & Date <= input$end_date)
+  })
+  
+  # Plot data asli
+  output$originalPlot <- renderPlot({
+    ggplot(data_bensin, aes(x = Date, y = Bensin)) +
+      geom_line(color = "blue") +
+      labs(title = "Penjualan Bensin dari Waktu ke Waktu", x = "Tanggal", y = "Penjualan Bensin") +
+      theme_minimal()
+  })
+  
+  # Reactive untuk membuat model ARIMA
+  model_arima <- reactive({
+    auto.arima(filtered_data()$Bensin, seasonal = TRUE)
+  })
+  
+  # Plot prediksi berdasarkan ARIMA
+  output$forecastPlot <- renderPlot({
+    input$update # Trigger action button
+    
+    forecast_arima <- forecast(model_arima(), h = input$forecast_days)
+    
+    autoplot(forecast_arima) +
+      labs(title = paste("Prediksi Penjualan Bensin", input$forecast_days, "Hari ke Depan"),
+           x = "Tanggal", y = "Penjualan Bensin") +
+      theme_minimal()
+  })
+}
+
+# Jalankan aplikasi Shiny
+shinyApp(ui = ui, server = server)
+
+```
+
